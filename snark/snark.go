@@ -1,12 +1,9 @@
-// implementation of https://eprint.iacr.org/2013/879.pdf
-
 package snark
 
 import (
 	"fmt"
 	"math/big"
 	"os"
-
 	"github.com/arnaucube/go-snark/bn128"
 	"github.com/arnaucube/go-snark/circuitcompiler"
 	"github.com/arnaucube/go-snark/fields"
