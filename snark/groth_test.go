@@ -1,6 +1,7 @@
 package snark
 
 import (
+	"os"
 	"bytes"
 	"fmt"
 	"math/big"
@@ -11,7 +12,36 @@ import (
 	"github.com/arnaucube/go-snark/groth16"
 	"github.com/arnaucube/go-snark/r1csqap"
 	"github.com/stretchr/testify/assert"
+	"runtime/pprof"
+	"runtime"
+	
 )
+
+// Measure CPU utilization
+func measureCPUUsage() float64 {
+	var cpuUsage float64
+	numCPU := runtime.NumCPU()
+	startTime := time.Now()
+	done := make(chan struct{})
+	go func() {
+		start := runtime.NumGoroutine()
+		time.Sleep(1 * time.Second) // Measure over 1 sec
+		end := runtime.NumGoroutine()
+		elapsed := time.Since(startTime).Seconds()
+		cpuUsage = float64(end-start) / elapsed * 100 / float64(numCPU)
+		close(done)
+	}()
+
+	<-done
+	return cpuUsage
+}
+
+// Measure memory usage
+func measureMemoryUsage() (uint64, uint64) {
+    var memStats runtime.MemStats
+    runtime.ReadMemStats(&memStats)
+    return memStats.Alloc / 1024, memStats.Sys / 1024 // Convert to KB
+}
 
 func TestGroth16MinimalFlow(t *testing.T) {
 	fmt.Println("testing Groth16 minimal flow")
@@ -85,11 +115,77 @@ func TestGroth16MinimalFlow(t *testing.T) {
 	// check length of polynomials H(x) and Z(x)
 	assert.Equal(t, len(hx), len(px)-len(setup.Pk.Z)+1)
 
-	proof, err := groth16.GenerateProofs(*circuit, setup.Pk, w, px)
-	assert.Nil(t, err)
+	start := time.Now()
 
-	// fmt.Println("\n proofs:")
-	// fmt.Println(proof)
+	// Create a file to store CPU profiling data
+	cpuProfile, err := os.Create("cpu_profile.prof")
+	if err != nil {
+		t.Fatal("Could not create CPU profile:", err)
+	}
+	defer cpuProfile.Close()
+
+	// Start CPU profiling
+	pprof.StartCPUProfile(cpuProfile)
+	defer pprof.StopCPUProfile()
+
+	// Measure proof generation time
+	startTime := time.Now()
+
+	memBefore, sysBefore := measureMemoryUsage()
+
+	proof, err := groth16.GenerateProofs(*circuit, setup.Pk, w, px)
+	if err != nil {
+		t.Fatalf("Error generating proof: %v", err)
+	}
+
+	var rawProofBuffer bytes.Buffer
+
+	// Write A, B, C directly in binary without using any encoder
+	rawProofBuffer.Write(proof.PiA[0].Bytes())
+	rawProofBuffer.Write(proof.PiA[1].Bytes())
+	rawProofBuffer.Write(proof.PiA[2].Bytes())
+
+	rawProofBuffer.Write(proof.PiB[0][0].Bytes())
+	rawProofBuffer.Write(proof.PiB[0][1].Bytes())
+	rawProofBuffer.Write(proof.PiB[1][0].Bytes())
+	rawProofBuffer.Write(proof.PiB[1][1].Bytes())
+	rawProofBuffer.Write(proof.PiB[2][0].Bytes())
+	rawProofBuffer.Write(proof.PiB[2][1].Bytes())
+
+	rawProofBuffer.Write(proof.PiC[0].Bytes())
+	rawProofBuffer.Write(proof.PiC[1].Bytes())
+	rawProofBuffer.Write(proof.PiC[2].Bytes())
+
+	fmt.Printf("zk-SNARK Proof Size (Minimal Encoding): %d bytes\n", rawProofBuffer.Len())
+
+	// Stop timer after proof generation
+	elapsedTime := time.Since(startTime)
+
+	// Print profiling results
+	fmt.Printf("=== zk-SNARK CPU Profiling Done ===\n")
+	fmt.Printf("Proof Generation Time: %v\n", elapsedTime)
+
+	// Log results in Go test output
+	t.Logf("Proof generated successfully in %v", elapsedTime)
+	fmt.Println("CPU profile saved to cpu_profile.prof")
+
+	elapsed := time.Since(start)
+
+	// Measure memory usage after proof generation
+	memAfter, sysAfter := measureMemoryUsage()
+
+	// Print memory results
+	fmt.Printf("Memory Usage Before: %d KB, After: %d KB\n", memBefore, memAfter)
+	fmt.Printf("Total System Memory Before: %d KB, After: %d KB\n", sysBefore, sysAfter)
+
+	// Log results
+	t.Logf("Memory Usage Before: %d KB, After: %d KB", memBefore, memAfter)
+	t.Logf("Total System Memory Before: %d KB, After: %d KB", sysBefore, sysAfter)
+
+	fmt.Printf("Time taken to generate proof: %v\n", elapsed)
+
+	fmt.Println("\n proofs:")
+	fmt.Println(proof)
 
 	// fmt.Println("public signals:", proof.PublicSignals)
 	fmt.Println("\nsignals:", circuit.Signals)
